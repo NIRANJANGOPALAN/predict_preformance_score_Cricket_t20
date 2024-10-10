@@ -1,151 +1,86 @@
 import streamlit as st
 import pandas as pd
-import math
-from pathlib import Path
+import numpy as np
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+import xgboost as xgb
+import joblib
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+# Load the trained model
+model = joblib.load('xgb_model.joblib')
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+# Load the scaler
+scaler = joblib.load('scaler.joblib')
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+# Load the label encoder
+le = joblib.load('label_encoder.joblib')
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+st.title('Cricket Player Performance Predictor')
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+st.write("""
+This app predicts a cricket player's performance based on their statistics.
+Please enter the player's details below:
+""")
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+# Function to reset all input fields
+def clear_form():
+    st.session_state['striker'] = ''
+    st.session_state['player_type'] = 'Batsman'
+    st.session_state['total_runs_scored'] = 0
+    st.session_state['total_batting_average'] = 0.0
+    st.session_state['batting_strike_rate'] = 0.0
+    st.session_state['total_wickets'] = 0
+    st.session_state['economy_rate'] = 0.0
+    st.session_state['total_balls_faced'] = 0
+    st.session_state['balls_bowled'] = 0
+    st.session_state['overs_bowled_clean'] = 0.0
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
+# Input fields
+striker = st.text_input('Player Name', key='striker')
+player_type = st.selectbox('Player Type', ['Batsman', 'Bowler', 'All-rounder'], key='player_type')
+total_runs_scored = st.number_input('Total Runs Scored', min_value=0, key='total_runs_scored')
+total_batting_average = st.number_input('Total Batting Average', min_value=0.0, key='total_batting_average')
+batting_strike_rate = st.number_input('Batting Strike Rate', min_value=0.0, key='batting_strike_rate')
+total_wickets = st.number_input('Total Wickets', min_value=0, key='total_wickets')
+economy_rate = st.number_input('Economy Rate', min_value=0.0, key='economy_rate')
+total_balls_faced = st.number_input('Total Balls Faced', min_value=0, key='total_balls_faced')
+balls_bowled = st.number_input('Balls Bowled', min_value=0, key='balls_bowled')
+overs_bowled_clean = st.number_input('Overs Bowled (Clean)', min_value=0.0, key='overs_bowled_clean')
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+col1, col2 = st.columns(2)
 
-    return gdp_df
+with col1:
+    if st.button('Predict Performance'):
+        # Create a dataframe with the input
+        input_data = pd.DataFrame({
+            'Player_type': [player_type],
+            'totalrunsscored': [total_runs_scored],
+            'Total_batting_average': [total_batting_average],
+            'batting_strike_rate': [batting_strike_rate],
+            'totalwickets': [total_wickets],
+            'economyrate': [economy_rate],
+            'totalballsfaced': [total_balls_faced],
+            'Balls Bowled': [balls_bowled],
+            'oversbowled_clean': [overs_bowled_clean]
+        })
 
-gdp_df = get_gdp_data()
+        # Encode the Player_type
+        input_data['Player_type'] = le.transform(input_data['Player_type'])
 
-# -----------------------------------------------------------------------------
-# Draw the actual page
+        # Scale the input data
+        input_scaled = scaler.transform(input_data)
 
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
+        # Make prediction
+        prediction = model.predict(input_scaled)
 
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
+        st.write(f"Predicted Performance Score for {striker}: {prediction[0]:.2f}")
 
-# Add some spacing
-''
-''
+with col2:
+    if st.button('Clear Form'):
+        clear_form()
 
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+st.write("""
+### Note:
+- The model uses advanced machine learning techniques to predict player performance.
+- The prediction is based on the statistics provided and may not account for all factors that influence a player's performance.
+- Use this prediction as a guide, not as a definitive measure of a player's abilities.
+""")
